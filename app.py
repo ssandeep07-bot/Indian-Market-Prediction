@@ -1,269 +1,133 @@
-import datetime as dt
-import numpy as np
-import pandas as pd
-import requests
 import streamlit as st
+import pandas as pd
+import plotly.graph_objects as go
+import numpy as np
+from datetime import datetime
+from utils.data_manager import get_historical_data, get_nifty50_tickers
+from utils.algorithm_engine import run_short_term_algo
 
-# ---------- CONFIG ----------
-API_BASE_URL = "http://nse-api-khaki.vercel.app:5000"
+# --- Configuration ---
+st.set_page_config(layout="wide", page_title="Personal Stock Recommender")
 
-# Use plain NSE symbols (API defaults to NSE when no suffix is given) [web:8]
-DEFAULT_SYMBOLS = {
-    "Reliance Industries (NSE)": "RELIANCE",
-    "Infosys (NSE)": "INFY",
-    "HDFC Bank (NSE)": "HDFCBANK",
-    "TCS (NSE)": "TCS",
-    "ICICI Bank (NSE)": "ICICIBANK",
-}
+# --- Filters and Settings ---
+st.sidebar.header("Filters & Settings")
+holding_period = st.sidebar.radio(
+    "Select Holding Period:",
+    ('Short-Term (5-Day Forecast)', 'Mid-Term (Placeholder)', 'Long-Term (Placeholder)'),
+    index=0
+)
+st.sidebar.markdown(f"**Next Refresh:** {datetime.now().strftime('%d %b, 4:30 PM IST')} (Daily EOD)")
 
-FORECAST_DAYS = 5
-SYNTHETIC_HISTORY_DAYS = 60  # for charting, we simulate last 60 trading days
+# --- Data Fetching (runs once due to caching) ---
+TICKER_LIST = get_nifty50_tickers()
+@st.cache_data(show_spinner="Loading and backtesting 5+ years of data...")
+def get_backtest_data():
+    return get_historical_data(TICKER_LIST, period='5y')
 
+full_data = get_backtest_data()
 
-# ---------- DATA FUNCTIONS ----------
-@st.cache_data(show_spinner=False)
-def fetch_live_price(symbol: str) -> dict:
-    """
-    Fetch current price and basic info for a single symbol from Indian Stock Market API.
-    Uses numeric response format res=num for easy parsing. [web:8]
-    """
-    url = f"{API_BASE_URL}/stock"
-    params = {"symbol": symbol, "res": "num"}
-    try:
-        r = requests.get(url, params=params, timeout=10)
-        r.raise_for_status()
-        data = r.json()
-    except Exception:
-        return {}
+# --- Main Dashboard Logic ---
+st.title("🧠 Personal Quant Recommendation System")
+st.markdown(f"**Recommendations as of:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}")
+st.markdown("---")
 
-    if not isinstance(data, dict):
-        return {}
+if full_data.empty:
+    st.error("Cannot load market data. Please check data_manager.py.")
+    st.stop()
 
-    # Expected shape (simplified): {"status": "success", "stock": {...}} [web:8]
-    if data.get("status") != "success":
-        return {}
+# --- 1. Algorithm Run and Recommendation Table ---
+recommendations = []
+unique_tickers = full_data['Ticker'].unique()
 
-    stock = data.get("stock") or {}
-    return stock
+progress_text = f"Running {holding_period} Algorithm on {len(unique_tickers)} stocks..."
+my_bar = st.progress(0, text=progress_text)
 
-
-@st.cache_data(show_spinner=False)
-def build_synthetic_history(symbol: str) -> pd.DataFrame:
-    """
-    Build a synthetic recent price history from the current price.
-    Because this API gives us real-time last_price but not full OHLC history,
-    we create a simple random-walk history for UI purposes. [web:8][web:139]
-    """
-    stock = fetch_live_price(symbol)
-    last_price = stock.get("last_price")
-
-    if last_price is None:
-        return pd.DataFrame()
-
-    try:
-        last_price = float(last_price)
-    except Exception:
-        return pd.DataFrame()
-
-    # Generate BACKWARD synthetic path for the last N trading days
-    rng = np.random.default_rng(seed=123)
-    # daily pct changes ~ normal(0, 1%) – mild volatility
-    daily_changes_pct = rng.normal(loc=0.0, scale=0.01, size=SYNTHETIC_HISTORY_DAYS)
-    prices = [last_price]
-
-    # Walk backwards (so we get plausible past prices leading to last_price)
-    for change in daily_changes_pct[::-1]:
-        prev_price = prices[0] / (1 + change)
-        prices.insert(0, prev_price)
-
-    # Generate past trading dates (skip weekends)
-    dates = []
-    current = dt.date.today()
-    while len(dates) < len(prices):
-        if current.weekday() < 5:  # Mon–Fri
-            dates.append(current)
-        current -= dt.timedelta(days=1)
-    dates = sorted(dates)[-len(prices):]
-
-    df = pd.DataFrame({"date": dates, "close": prices})
-    df["date"] = pd.to_datetime(df["date"])
-    df = df.set_index("date")
-    return df
-
-
-def get_next_trading_days(start_date: dt.date, n: int = 5):
-    """
-    Simple trading-day logic: skip weekends.
-    Later we can replace with full NSE/BSE calendars. [web:8]
-    """
-    days = []
-    current = start_date
-    while len(days) < n:
-        current = current + dt.timedelta(days=1)
-        if current.weekday() < 5:
-            days.append(current)
-    return days
-
-
-# ---------- DUMMY FORECAST MODEL (TO BE REPLACED LATER) ----------
-def simple_dummy_forecast(last_close: float, last_date: dt.date, n_days: int = FORECAST_DAYS):
-    """
-    Placeholder forecast:
-    - Starts from the last close price.
-    - Adds small random drift.
-    - Returns 5-day price path and a simple Buy/Sell/Hold suggestion.
-    """
-    if last_close is None or last_close <= 0:
-        return pd.DataFrame(), 0.0, "HOLD"
-
-    rng = np.random.default_rng(seed=42)
-    daily_changes_pct = rng.normal(loc=0.001, scale=0.01, size=n_days)  # mean +0.1%, std 1%
-    prices = []
-    current_price = float(last_close)
-
-    for change in daily_changes_pct:
-        current_price = current_price * (1 + change)
-        prices.append(current_price)
-
-    dates = get_next_trading_days(last_date, n_days)
-
-    forecast_df = pd.DataFrame(
-        {
-            "date": dates,
-            "predicted_close": prices,
-        }
-    )
-
-    expected_return_pct = (forecast_df["predicted_close"].iloc[-1] / float(last_close) - 1) * 100
-
-    if expected_return_pct > 3:
-        action = "BUY"
-    elif expected_return_pct < -3:
-        action = "SELL"
+for i, ticker in enumerate(unique_tickers):
+    my_bar.progress((i + 1) / len(unique_tickers), text=f"Processing {ticker}...")
+    
+    df_ticker = full_data[full_data['Ticker'] == ticker].copy()
+    
+    # Only run the short-term model for now
+    if holding_period == 'Short-Term (5-Day Forecast)':
+        signal, prescription, rationale = run_short_term_algo(df_ticker)
     else:
-        action = "HOLD"
+        signal, prescription, rationale = "N/A", "Model not implemented.", "N/A"
+        
+    recommendations.append({
+        "Symbol": ticker, 
+        "Signal Strength": signal, 
+        "Prescription (T/SL)": prescription,
+        "Rationale/Why": rationale,
+        "Refresh": "Daily EOD"
+    })
+my_bar.empty()
 
-    return forecast_df, expected_return_pct, action
+recommendations_df = pd.DataFrame(recommendations)
+st.subheader(f"🎯 Today's {holding_period} Watchlist")
 
+# Apply color coding
+def color_signals(val):
+    if "BUY" in val: return 'background-color: #d4edda; color: #155724'
+    elif "SELL" in val: return 'background-color: #f8d7da; color: #721c24'
+    else: return 'background-color: #ffeeba; color: #856404'
 
-# ---------- STREAMLIT UI ----------
-def main():
-    st.set_page_config(
-        page_title="Indian Market 5-Day Predictor",
-        page_icon="📈",
-        layout="wide",
-    )
+st.dataframe(
+    recommendations_df.style.applymap(color_signals, subset=['Signal Strength']),
+    hide_index=True,
+    use_container_width=True
+)
 
-    st.title("Indian Market 5-Day Predictor")
-    st.caption(
-        "Personal research tool for NSE/BSE stocks (prototype UI, live price via Indian Stock Market API, "
-        "forecast is a placeholder model)."
-    )
+st.markdown("---")
 
-    # Sidebar: stock selection and info
-    st.sidebar.header("Configuration")
-    symbol_label = st.sidebar.selectbox(
-        "Select stock",
-        options=list(DEFAULT_SYMBOLS.keys()),
-        index=0,
-    )
-    symbol = DEFAULT_SYMBOLS[symbol_label]
+# --- 2. Detailed Analysis & Backtesting Audit ---
+st.subheader("🧪 Backtesting Audit & Detailed Analysis")
+selected_ticker = st.selectbox(
+    "Select a stock to view model performance and chart:",
+    options=unique_tickers
+)
 
-    st.sidebar.markdown("**Forecast horizon:** 5 trading days")
-    st.sidebar.markdown("Model: simple dummy drift model (to be upgraded to LSTM + sentiment).")
+if selected_ticker:
+    df_ticker_analysis = full_data[full_data['Ticker'] == selected_ticker].copy()
+    
+    # Run the backtesting logic to get KPIs (FR-O03)
+    kpis = run_short_term_algo(df_ticker_analysis, backtest=True)
 
-    # Fetch live data
-    with st.spinner("Fetching live price..."):
-        stock_info = fetch_live_price(symbol)
+    col1, col2, col3, col4, col5 = st.columns(5)
+    
+    col1.metric("Sharpe Ratio", kpis.get("Sharpe Ratio", "N/A"), "Goal: > 1.0")
+    col2.metric("Max Drawdown", kpis.get("Max Drawdown", "N/A"), "Goal: < 20%")
+    col3.metric("CAGR", kpis.get("CAGR", "N/A"), "Goal: > Benchmark")
+    col4.metric("Win Rate", kpis.get("Win Rate", "N/A"), "Total Trades: " + str(kpis.get("Total Trades", 0)))
+    
+    # --- Candlestick Chart with Historical Signals ---
+    st.markdown(f"### Historical Signals for {selected_ticker}")
+    
+    # Rerunning algo to get the signals for plotting
+    df_chart = df_ticker_analysis.copy()
+    df_chart['Signal'] = run_short_term_algo(df_chart, backtest=False) # Simplified for quick chart plot
+    
+    # Only use the last 252 days (1 year) for chart clarity
+    df_chart = df_chart.iloc[-252:]
+    
+    fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
+                                         open=df_chart['Close'].shift(1),
+                                         high=df_chart['Close'].rolling(5).max(),
+                                         low=df_chart['Close'].rolling(5).min(),
+                                         close=df_chart['Close'],
+                                         name='Price')])
 
-    if not stock_info:
-        st.error("Unable to fetch live price data for this symbol. Please try another one or reload.")
-        return
+    buy_points = df_chart[df_chart['Final_Signal'] == 1.0]
+    sell_points = df_chart[df_chart['Final_Signal'] == -1.0]
 
-    last_price = stock_info.get("last_price")
-    exchange = stock_info.get("exchange", "NSE")
-    ticker = stock_info.get("ticker", symbol)
-    change_pct = stock_info.get("percent_change")
+    fig.add_trace(go.Scatter(x=buy_points['Date'], y=buy_points['Close'] * 0.99,
+                             mode='markers', marker_symbol='triangle-up',
+                             marker=dict(size=10, color='green'), name='Buy Signal'))
+    fig.add_trace(go.Scatter(x=sell_points['Date'], y=sell_points['Close'] * 1.01,
+                             mode='markers', marker_symbol='triangle-down',
+                             marker=dict(size=10, color='red'), name='Sell Signal'))
 
-    try:
-        last_price_float = float(last_price)
-    except Exception:
-        st.error("Live price is not numeric, cannot proceed. Try reloading.")
-        return
+    fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Signals (Last 1 Year)")
+    st.plotly_chart(fig, use_container_width=True)
+    
 
-    st.subheader(f"Current overview: {symbol_label}")
-    col_price, col_change = st.columns(2)
-    with col_price:
-        st.metric("Last traded price", f"{last_price_float:,.2f} INR")
-    with col_change:
-        try:
-            if change_pct is not None:
-                change_pct_float = float(change_pct)
-                st.metric("Today's change", f"{change_pct_float:,.2f}%")
-            else:
-                st.metric("Today's change", "N/A")
-        except Exception:
-            st.metric("Today's change", "N/A")
-
-    st.caption(f"Exchange: {exchange} | Ticker: {ticker}")
-
-    # Synthetic historical chart (for now)
-    st.markdown("### Price trend (synthetic last 60 trading days)")
-    with st.spinner("Building synthetic history for charting..."):
-        hist_df = build_synthetic_history(symbol)
-
-    if hist_df is None or hist_df.empty:
-        st.warning("Could not build a price history series. Only showing live price.")
-    else:
-        st.line_chart(hist_df["close"])
-
-    # Forecast section
-    st.markdown("### 5-day forecast & recommendation")
-    last_date_for_forecast = dt.date.today()
-    forecast_df, expected_return_pct, action = simple_dummy_forecast(
-        last_close=last_price_float,
-        last_date=last_date_for_forecast,
-        n_days=FORECAST_DAYS,
-    )
-
-    if forecast_df is None or forecast_df.empty:
-        st.warning("Forecast could not be generated. Please reload.")
-        return
-
-    col1, col2 = st.columns(2)
-    with col1:
-        st.metric("Expected 5-day return", f"{expected_return_pct:,.2f}%")
-    with col2:
-        st.metric("Suggested action", action)
-
-    # Combine last actual with forecast for plotting
-    combined = pd.concat(
-        [
-            pd.DataFrame(
-                {
-                    "date": [last_date_for_forecast],
-                    "price": [last_price_float],
-                    "type": ["Actual last price"],
-                }
-            ),
-            pd.DataFrame(
-                {
-                    "date": forecast_df["date"],
-                    "price": forecast_df["predicted_close"].astype(float),
-                    "type": ["Forecast"] * len(forecast_df),
-                }
-            ),
-        ],
-        ignore_index=True,
-    )
-    combined = combined.set_index("date")
-
-    st.markdown("#### Price path (live last price + next 5 trading days)")
-    st.line_chart(combined["price"])
-
-    st.markdown("#### Forecast table")
-    st.dataframe(forecast_df.style.format({"predicted_close": "{:,.2f}"}))
-
-
-if __name__ == "__main__":
-    main()
+[Image of Streamlit stock analysis dashboard layout]

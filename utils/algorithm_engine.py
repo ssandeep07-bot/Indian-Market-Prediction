@@ -43,31 +43,28 @@ def add_indicators(df):
     return df.reset_index()
 # (The rest of utils/algorithm_engine.py remains the same)
 # --- Short-Term Strategy (Triple-Confirmation) ---
+# utils/algorithm_engine.py (Updated run_short_term_algo)
+
 def run_short_term_algo(df_ticker, backtest=False):
-    """Short-Term (5-Day) Strategy: Triple-Confirmation Model."""
+    """Short-Term (5-Day) Strategy: Simplified Trend/Condition Model (No MACD)."""
     df = add_indicators(df_ticker)
     
-    # --- FIX 1: IMMEDIATE CRITICAL COLUMN CHECK ---
-    required_cols = ['Close', 'EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
+    # --- Check for minimum required columns (Now only EMA and RSI) ---
+    required_cols = ['Close', 'EMA50', 'RSI']
     if not all(col in df.columns for col in required_cols):
-        # Gracefully exit if indicators are missing
-        return calculate_kpis(df_ticker) if backtest else ("HOLD", "Critical indicators missing after calculation.", "N/A")
+        return calculate_kpis(df) if backtest else ("HOLD", "Indicators failed to load.", "N/A")
     
     if df.empty or len(df) < 50:
         return calculate_kpis(df) if backtest else ("HOLD", "Data too short after cleaning.", "N/A")
 
-    # --- 2. Generate Signals ---
+    # --- 2. Generate Signals (Simplified Logic) ---
     df['Trend_Filter'] = df['Close'] > df['EMA50']
     
-    # Momentum Signal: MACD Line > MACD Signal line
-    df['Momentum_Signal'] = np.where(df['MACD_Line'] > df['MACD_Signal'], 1.0, 0.0)
-    df['Momentum_Signal'] = np.where(df['MACD_Line'] < df['MACD_Signal'], -1.0, df['Momentum_Signal'])
-
-    # Final BUY condition: Trend UP AND Momentum BUY AND RSI not Overbought (<70)
-    buy_condition = (df['Trend_Filter'] == True) & (df['Momentum_Signal'] == 1.0) & (df['RSI'] < 70)
+    # Final BUY condition: Trend UP AND RSI is not Overbought (<65)
+    buy_condition = (df['Trend_Filter'] == True) & (df['RSI'] < 65) # Use 65 as threshold
     
-    # Final SELL condition: Trend DOWN AND Momentum SELL
-    sell_condition = (df['Trend_Filter'] == False) & (df['Momentum_Signal'] == -1.0)
+    # Final SELL condition: Trend DOWN AND RSI is Overbought (>75)
+    sell_condition = (df['Trend_Filter'] == False) & (df['RSI'] > 75)
     
     df['Final_Signal'] = 0
     df.loc[buy_condition, 'Final_Signal'] = 1
@@ -77,24 +74,25 @@ def run_short_term_algo(df_ticker, backtest=False):
     if backtest:
         return calculate_kpis(df)
     
+    # ... (Rest of the output prescription logic remains the same) ...
     last_row = df.iloc[-1]
     latest_signal = last_row['Final_Signal']
     latest_price = last_row['Close']
     
     if latest_signal == 1:
-        target = latest_price * 1.03
-        stop_loss = latest_price * 0.98
-        rationale = "Trend UP (C > EMA50), MACD Buy Crossover, RSI OK (<70)."
+        target = latest_price * 1.02
+        stop_loss = latest_price * 0.99
+        rationale = "Trend UP (C > EMA50) and RSI is not overbought."
         return "STRONG BUY", f"Entry: {latest_price:.2f} | T1: {target:.2f} | SL: {stop_loss:.2f}", rationale
+    # ... (rest of the return block)
     elif latest_signal == -1:
-        target = latest_price * 0.97
-        stop_loss = latest_price * 1.02
-        rationale = "Trend DOWN (C < EMA50), MACD Sell Crossover."
+        target = latest_price * 0.98
+        stop_loss = latest_price * 1.01
+        rationale = "Trend DOWN (C < EMA50) and RSI is overbought."
         return "STRONG SELL", f"Exit: {latest_price:.2f} | T1: {target:.2f} | SL: {stop_loss:.2f}", rationale
     else:
-        rationale = "Trend/Momentum Conflict (Neutral)."
+        rationale = "Neutral Trend."
         return "HOLD", "Monitor next refresh.", rationale
-
 
 # --- Long-Term Strategy (QVAL Proxy) ---
 def run_long_term_algo(df_ticker, backtest=False):

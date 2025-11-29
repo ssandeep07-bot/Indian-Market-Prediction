@@ -20,12 +20,12 @@ st.sidebar.markdown(f"**Next Refresh:** {datetime.now().strftime('%d %b, 4:30 PM
 
 # --- Data Fetching ---
 TICKER_LIST = get_nifty50_tickers()
+# app.py (around line 34) - TEMPORARY CHANGE
 @st.cache_data(show_spinner="Loading and backtesting 5+ years of data from Finnhub...")
-def get_backtest_data():
+def get_backtest_data_v2(): # <-- CHANGED NAME
     return get_historical_data(TICKER_LIST, period='5y')
 
-full_data = get_backtest_data()
-
+full_data = get_backtest_data_v2() # <-- CHANGED NAME HERE TOO
 # --- Main Dashboard Logic ---
 st.title("🧠 Personal Quant Recommendation System")
 st.markdown(f"**Recommendations as of:** {datetime.now().strftime('%Y-%m-%d %H:%M:%S IST')}")

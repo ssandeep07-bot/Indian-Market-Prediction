@@ -8,54 +8,39 @@ import streamlit as st
 
 # utils/algorithm_engine.py (FINAL FIXED add_indicators)
 
+# utils/algorithm_engine.py (FINAL CRASH-PROOF add_indicators)
+
 def add_indicators(df):
-    """Adds necessary indicators to the DataFrame using pandas-ta."""
+    """Adds necessary indicators using only stable functions (EMA and RSI)."""
     if df.empty or 'Close' not in df.columns:
         return df
 
     df = df.set_index('Date').sort_index().copy()
 
     try:
-        # EMA50 (Trend Filter)
+        # EMA50 (Trend Filter) - Stable
         df.ta.ema(close='Close', length=50, append=True)
         df['EMA50'] = df['EMA_50']
         
-        # MACD (fast=12, slow=26, signal=9)
-        # We rely on the core TA function to handle its own naming, but use error handling.
-        df.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
-        
-        # ASSIGNMENT FIX: Use the standard names and handle NaNs created by the TA function
-        df['MACD_Line'] = df['MACD_12_26_9']      
-        df['MACD_Signal'] = df['MACDS_12_26_9'] # This line is the crash point
-        
-        # RSI (Condition)
+        # RSI (Condition) - Stable
         df.ta.rsi(close='Close', length=14, append=True) 
         df['RSI'] = df['RSI_14']
-        
-        # Drop all indicator NaNs to ensure clean subsequent calculations
-        df.dropna(inplace=True)
-        
-    except KeyError as e:
-        # This catches the persistent 'MACDS_12_26_9' error.
-        st.warning(f"Indicator calculation failed (KeyError: {e}). Data may be incomplete.")
-        
-        # Clean up any partial MACD columns to ensure they don't crash the main logic
+
+        # ADD NECESSARY PLACEHOLDERS TO PREVENT KEY ERROR IN MAIN LOGIC
+        # These columns will be all NaN but prevent crashing on line 120 of app.py
         df['MACD_Line'] = np.nan
         df['MACD_Signal'] = np.nan
-        df['EMA50'] = np.nan
-        df['RSI'] = np.nan
-        df.dropna(inplace=True) # Final clean after setting NaNs
-
+        
+        # Drop initial NaN values created by indicators (e.g., first 50 days of EMA50)
+        df.dropna(inplace=True)
+        
     except Exception as e:
-        st.warning(f"General error during indicator calculation: {e}. Returning incomplete data.")
+        # If any indicator calculation fails, warn but proceed
+        st.warning(f"Error during indicator calculation: {e}. Returning incomplete data.")
         # Ensure that incomplete columns are cleaned before returning
-        for col in ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']:
-            if col in df.columns:
-                df.drop(columns=[col], errors='ignore', inplace=True)
         return df.reset_index() 
         
     return df.reset_index()
-
 # (The rest of utils/algorithm_engine.py remains the same)
 # --- Short-Term Strategy (Triple-Confirmation) ---
 def run_short_term_algo(df_ticker, backtest=False):

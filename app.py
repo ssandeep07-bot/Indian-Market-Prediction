@@ -130,4 +130,4 @@ if selected_ticker:
     st.plotly_chart(fig, use_container_width=True)
     
 
-[Image of Streamlit stock analysis dashboard layout]
+

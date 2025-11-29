@@ -3,4 +3,5 @@ yfinance
 pandas
 numpy
 plotly
-TA-Lib==0.4.28
+pandas-ta
+scikit-learn

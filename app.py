@@ -125,7 +125,14 @@ if selected_ticker:
     # ------------------------------------------------------------------------
     
     # Use the robust add_indicators function to prepare the chart data
+  # app.py (around line 117) - FINAL STABLE CHARTING LOGIC
+
+    # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
+    
+    # ------------------------------------------------------------------------
+    # 2. CHARTING LOGIC (Must isolate signal generation)
+    # ------------------------------------------------------------------------
     
     required_chart_cols = ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
     
@@ -136,9 +143,15 @@ if selected_ticker:
         st.warning(f"Chart Warning: Cannot generate signals for {selected_ticker}. Data is insufficient or indicator calculation failed.")
         df_chart['Final_Signal'] = 0 # Initialize signal column safely
     else:
-        # EXECUTE SIGNAL LOGIC ONLY IF COLUMNS EXIST
-        buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
-        sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
+        # EXECUTE SIGNAL LOGIC ONLY IF COLUMNS EXIST (This is the critical block)
+        # Note: buy_condition is calculated safely inside this IF block.
+        buy_condition = (df_chart['Close'] > df_chart['EMA50']) & \
+                        (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & \
+                        (df_chart['RSI'] < 70)
+                        
+        sell_condition = (df_chart['Close'] < df_chart['EMA50']) & \
+                         (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
+                         
         df_chart['Final_Signal'] = 0
         df_chart.loc[buy_condition, 'Final_Signal'] = 1
         df_chart.loc[sell_condition, 'Final_Signal'] = -1
@@ -150,6 +163,7 @@ if selected_ticker:
     if df_chart.empty or df_chart['Close'].isnull().all():
         st.error("Cannot display chart due to missing recent pricing data.")
     else:
+        # Plotly chart creation (remains the same)
         fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
                                              open=df_chart['Open'], 
                                              high=df_chart['High'],

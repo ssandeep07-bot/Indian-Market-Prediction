@@ -1,63 +1,84 @@
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-from datetime import timedelta
-import streamlit as st # Keep st import for debugging/logging
+import streamlit as st
+
+# --- Helper Function to Process Indicators Robustly ---
+def add_indicators(df):
+    """Adds necessary indicators to the DataFrame using pandas-ta."""
+    if df.empty or 'Close' not in df.columns:
+        return df
+
+    # Set index for reliable ta calculations
+    df = df.set_index('Date').sort_index().copy()
+
+    try:
+        # EMA50 (Trend Filter)
+        df.ta.ema(close='Close', length=50, append=True)
+        df['EMA50'] = df['EMA_50']
+        
+        # MACD (Momentum)
+        df.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
+        # FIX: Explicit check and fallback for MACD column names
+        if 'MACD_12_26_9' in df.columns and 'MACDS_12_26_9' in df.columns:
+            df['MACD_Line'] = df['MACD_12_26_9']      
+            df['MACD_Signal'] = df['MACDS_12_26_9']
+        else:
+            st.warning("MACD columns not found. Skipping MACD signals for this stock.")
+            df['MACD_Line'] = np.nan
+            df['MACD_Signal'] = np.nan
+        
+        # RSI (Condition)
+        df.ta.rsi(close='Close', length=14, append=True)
+        df['RSI'] = df['RSI_14']
+        
+        # Drop initial NaN values created by indicators (e.g., first 50 days of EMA50)
+        df.dropna(inplace=True)
+        
+    except Exception as e:
+        st.error(f"Error during indicator calculation: {e}")
+        return df.reset_index() # Return partial DF
+        
+    return df.reset_index()
+
 
 # --- PREDICTION AND PRESCRIPTION CORE ---
 
 def run_short_term_algo(df_ticker, backtest=False):
     """
     Short-Term (5-Day) Strategy: Triple-Confirmation Model.
-    
-    Args:
-        df_ticker (pd.DataFrame): Historical data for one stock.
-        backtest (bool): If True, returns KPIs. If False, returns latest signal.
     """
-    # ----------------------------------------------------
-    # FIX: Robustness Check - Ensure 'Close' column exists and DataFrame is large enough
-    # ----------------------------------------------------
-    if 'Close' not in df_ticker.columns:
-        st.error(f"Algorithm Error: Input DataFrame is missing the 'Close' column.")
-        return calculate_kpis(df_ticker) if backtest else ("HOLD", "Data Error: Missing Close Price.", "N/A")
-    
-    # Requires 200 days for 50-day EMA and clean calculations
     if df_ticker.empty or len(df_ticker) < 200:
         return calculate_kpis(df_ticker) if backtest else ("HOLD", "Insufficient data (<200 days).", "N/A")
 
-    df = df_ticker.copy().set_index('Date').sort_index()
+    df = add_indicators(df_ticker)
+    
+    # Must re-check length after dropping NaNs
+    if df.empty or len(df) < 50:
+        return calculate_kpis(df) if backtest else ("HOLD", "Data too short after cleaning.", "N/A")
 
-    # --- 1. Calculate Technical Indicators (using pandas-ta) ---
-    
-    # EMA50 (Trend Filter)
-    df.ta.ema(close='Close', length=50, append=True)
-    df['EMA50'] = df['EMA_50']
-    
-    # MACD (fast=12, slow=26, signal=9)
-    # The FIX relies on the standard naming convention: MACD_12_26_9 and MACDS_12_26_9
-    df.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
-    df['MACD_Line'] = df['MACD_12_26_9']      
-    df['MACD_Signal'] = df['MACDS_12_26_9'] 
-    
-    # RSI (Condition)
-    # The error occurred here, likely because 'Close' was missing earlier
-    df.ta.rsi(close='Close', length=14, append=True) 
-    df['RSI'] = df['RSI_14']
-
-    # --- 2. Generate Signals based on Triple-Confirmation (Logic remains the same) ---
+    # --- 2. Generate Signals based on Triple-Confirmation ---
     df['Trend_Filter'] = df['Close'] > df['EMA50']
     
+    # Check for MACD signal availability before using it
+    if 'MACD_Line' not in df.columns or df['MACD_Line'].isnull().all():
+        return calculate_kpis(df) if backtest else ("HOLD", "MACD calculation failed.", "N/A")
+
+    # Momentum Signal: MACD Line > MACD Signal line
     df['Momentum_Signal'] = np.where(df['MACD_Line'] > df['MACD_Signal'], 1.0, 0.0)
     df['Momentum_Signal'] = np.where(df['MACD_Line'] < df['MACD_Signal'], -1.0, df['Momentum_Signal'])
 
+    # Final BUY condition: Trend UP AND Momentum BUY AND RSI not Overbought (<70)
     buy_condition = (df['Trend_Filter'] == True) & (df['Momentum_Signal'] == 1.0) & (df['RSI'] < 70)
+    
+    # Final SELL condition: Trend DOWN AND Momentum SELL
     sell_condition = (df['Trend_Filter'] == False) & (df['Momentum_Signal'] == -1.0)
     
     df['Final_Signal'] = 0
     df.loc[buy_condition, 'Final_Signal'] = 1
     df.loc[sell_condition, 'Final_Signal'] = -1
     
-    # --- Output (Prediction/Prescription) ---
+    # --- Output ---
     if backtest:
         return calculate_kpis(df)
     
@@ -66,6 +87,7 @@ def run_short_term_algo(df_ticker, backtest=False):
     latest_signal = last_row['Final_Signal']
     latest_price = last_row['Close']
     
+    # --- PRESCRIPTION ---
     if latest_signal == 1:
         target = latest_price * 1.03
         stop_loss = latest_price * 0.98
@@ -80,12 +102,12 @@ def run_short_term_algo(df_ticker, backtest=False):
         rationale = "Trend/Momentum Conflict (Neutral)."
         return "HOLD", "Monitor next refresh.", rationale
 
-# (The calculate_kpis function remains the same)
 def calculate_kpis(df_signals):
     """
     Calculates Backtesting Key Performance Metrics (KPMs)
     Simulates a 5-day holding period.
     """
+    # ... (KPI calculation logic remains the same, but relies on robust data) ...
     if 'Final_Signal' not in df_signals.columns or df_signals.empty:
         return {"Sharpe Ratio": "0.00", "Max Drawdown": "0.00%", "CAGR": "0.00%", "Win Rate": "0.0%", "Total Trades": 0}
         

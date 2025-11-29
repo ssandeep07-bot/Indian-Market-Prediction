@@ -13,12 +13,12 @@ st.set_page_config(layout="wide", page_title="Personal Stock Recommender")
 st.sidebar.header("Filters & Settings")
 holding_period = st.sidebar.radio(
     "Select Holding Period:",
-    ('Short-Term (5-Day Forecast)', 'Long-Term (QVAL Proxy)'), # Mid-Term removed for clarity
+    ('Short-Term (5-Day Forecast)', 'Long-Term (QVAL Proxy)'),
     index=0
 )
 st.sidebar.markdown(f"**Next Refresh:** {datetime.now().strftime('%d %b, 4:30 PM IST')} (Daily EOD)")
 
-# --- Data Fetching (runs once due to caching) ---
+# --- Data Fetching ---
 TICKER_LIST = get_nifty50_tickers()
 @st.cache_data(show_spinner="Loading and backtesting 5+ years of data from Finnhub...")
 def get_backtest_data():
@@ -47,7 +47,7 @@ for i, ticker in enumerate(unique_tickers):
     
     df_ticker = full_data[full_data['Ticker'] == ticker].copy()
     
-    # Run the model based on sidebar selection
+    # Run the model
     if holding_period == 'Short-Term (5-Day Forecast)':
         signal, prescription, rationale = run_short_term_algo(df_ticker)
     elif holding_period == 'Long-Term (QVAL Proxy)':
@@ -91,7 +91,7 @@ selected_ticker = st.selectbox(
 if selected_ticker:
     df_ticker_analysis = full_data[full_data['Ticker'] == selected_ticker].copy()
     
-    # Determine which function to use for backtesting based on the selected period
+    # Run the backtesting logic to get KPIs (FR-O03)
     if holding_period == 'Short-Term (5-Day Forecast)':
         kpis = run_short_term_algo(df_ticker_analysis, backtest=True)
     elif holding_period == 'Long-Term (QVAL Proxy)':
@@ -99,13 +99,17 @@ if selected_ticker:
     else:
         kpis = {"Sharpe Ratio": "N/A", "Max Drawdown": "N/A", "CAGR": "N/A", "Win Rate": "N/A", "Total Trades": "N/A"}
 
+    # FIX: Ensure kpis is a dictionary for safety (fixes AttributeError)
+    if not isinstance(kpis, dict):
+        kpis = {"Sharpe Ratio": "Data Error", "Max Drawdown": "Data Error", "CAGR": "Data Error", "Win Rate": "Data Error", "Total Trades": "N/A"}
+
 
     col1, col2, col3, col4, col5 = st.columns(5)
     
     col1.metric("Sharpe Ratio", kpis.get("Sharpe Ratio", "N/A"), "Goal: > 1.0")
     col2.metric("Max Drawdown", kpis.get("Max Drawdown", "N/A"), "Goal: < 20%")
     col3.metric("CAGR", kpis.get("CAGR", "N/A"), "Goal: > Benchmark")
-    col4.metric("Win Rate", kpis.get("Win Rate", "N/A"), "Total Trades: " + str(kpis.get("Total Trades", 0)))
+    col4.metric("Win Rate", kpis.get("Win Rate", "N/A"), "Total Trades: " + str(kpis.get("Total Trades", "N/A")))
     
     # --- Candlestick Chart with Historical Signals ---
     st.markdown(f"### Historical Signals for {selected_ticker}")
@@ -113,36 +117,44 @@ if selected_ticker:
     # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
     
-    # Rerun the signal logic to get the 'Final_Signal' column for charting (required since main algo returns tuple)
-    df_chart['Final_Signal'] = 0 
-    if not df_chart.empty:
-        # Re-run indicator-based signal logic
+    required_chart_cols = ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
+    
+    if not all(col in df_chart.columns for col in required_chart_cols):
+        st.warning(f"Chart Warning: Skipping signal plot for {selected_ticker} as critical indicators are missing (data may be incomplete).")
+        df_chart['Final_Signal'] = 0
+    else:
+        # Re-run the signal logic to get the 'Final_Signal' column for charting (Short-Term model logic)
         buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
         sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
+        df_chart['Final_Signal'] = 0
         df_chart.loc[buy_condition, 'Final_Signal'] = 1
         df_chart.loc[sell_condition, 'Final_Signal'] = -1
-    
+
+
     # Only use the last 252 days (1 year) for chart clarity
     df_chart = df_chart.iloc[-252:].reset_index()
     
-    fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
-                                         open=df_chart['Open'], # Use Open/Close from Finnhub data
-                                         high=df_chart['High'],
-                                         low=df_chart['Low'],
-                                         close=df_chart['Close'],
-                                         name='Price')])
+    if df_chart.empty:
+        st.error("Cannot display chart due to insufficient recent data.")
+    else:
+        fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
+                                             open=df_chart['Open'], 
+                                             high=df_chart['High'],
+                                             low=df_chart['Low'],
+                                             close=df_chart['Close'],
+                                             name='Price')])
 
-    buy_points = df_chart[df_chart['Final_Signal'] == 1.0]
-    sell_points = df_chart[df_chart['Final_Signal'] == -1.0]
+        buy_points = df_chart[df_chart['Final_Signal'] == 1.0]
+        sell_points = df_chart[df_chart['Final_Signal'] == -1.0]
 
-    fig.add_trace(go.Scatter(x=buy_points['Date'], y=buy_points['Close'] * 0.99,
-                             mode='markers', marker_symbol='triangle-up',
-                             marker=dict(size=10, color='green'), name='Buy Signal'))
-    fig.add_trace(go.Scatter(x=sell_points['Date'], y=sell_points['Close'] * 1.01,
-                             mode='markers', marker_symbol='triangle-down',
-                             marker=dict(size=10, color='red'), name='Sell Signal'))
+        fig.add_trace(go.Scatter(x=buy_points['Date'], y=buy_points['Close'] * 0.99,
+                                 mode='markers', marker_symbol='triangle-up',
+                                 marker=dict(size=10, color='green'), name='Buy Signal'))
+        fig.add_trace(go.Scatter(x=sell_points['Date'], y=sell_points['Close'] * 1.01,
+                                 mode='markers', marker_symbol='triangle-down',
+                                 marker=dict(size=10, color='red'), name='Sell Signal'))
 
-    fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Signals (Last 1 Year)")
-    st.plotly_chart(fig, use_container_width=True)
+        fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Signals (Last 1 Year)")
+        st.plotly_chart(fig, use_container_width=True)
     
 

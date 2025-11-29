@@ -19,20 +19,53 @@ FORECAST_DAYS = 5
 # ---------- DATA FUNCTIONS ----------
 @st.cache_data(show_spinner=False)
 def load_price_data(symbol: str, years: int = 2) -> pd.DataFrame:
+    """
+    Load OHLCV data for a single symbol using yfinance.
+    Uses auto_adjust=False to ensure standard columns like 'Close' exist.
+    """
     end = dt.date.today()
     start = end - dt.timedelta(days=365 * years)
-    df = yf.download(symbol, start=start, end=end)
+
+    try:
+        df = yf.download(symbol, start=start, end=end, auto_adjust=False)
+    except Exception:
+        return pd.DataFrame()
+
     if df is None or df.empty:
         return pd.DataFrame()
-    df = df.rename(columns=str.lower)
-    cols = ["open", "high", "low", "close", "volume"]
-    df = df[[c for c in cols if c in df.columns]].dropna()
+
+    # Normalize column names: lower case, remove spaces
+    df.columns = [c.strip().lower() for c in df.columns]
+
+    # Map possible column variants to a standard set
+    col_map = {}
+    for c in df.columns:
+        if c in ["open"]:
+            col_map[c] = "open"
+        elif c in ["high"]:
+            col_map[c] = "high"
+        elif c in ["low"]:
+            col_map[c] = "low"
+        elif c in ["close", "adj close", "adjclose"]:
+            col_map[c] = "close"
+        elif c in ["volume"]:
+            col_map[c] = "volume"
+
+    df = df.rename(columns=col_map)
+
+    # Keep only what we need
+    wanted_cols = ["open", "high", "low", "close", "volume"]
+    existing = [c for c in wanted_cols if c in df.columns]
+    df = df[existing]
+
     return df
 
 
 def get_next_trading_days(last_date: pd.Timestamp, n: int = 5):
-    # Simple trading-day logic: skip weekends.
-    # Later we will plug in full NSE/BSE calendars.
+    """
+    Simple trading-day logic: skip weekends.
+    Later we will plug in full NSE/BSE calendars.
+    """
     days = []
     current = last_date.date()
     while len(days) < n:
@@ -53,14 +86,17 @@ def simple_dummy_forecast(df: pd.DataFrame, n_days: int = FORECAST_DAYS):
     if df is None or df.empty or "close" not in df.columns:
         return pd.DataFrame(), 0.0, "HOLD"
 
-    last_close = df["close"].dropna().iloc[-1]
+    close_series = df["close"].dropna()
+    if close_series.empty:
+        return pd.DataFrame(), 0.0, "HOLD"
+
+    last_close = float(close_series.iloc[-1])
     dates = get_next_trading_days(df.index[-1], n_days)
 
-    # Create a simple random walk around the last close
     rng = np.random.default_rng(seed=42)
     daily_changes_pct = rng.normal(loc=0.001, scale=0.01, size=n_days)  # mean +0.1%, std 1%
     prices = []
-    current_price = float(last_close)
+    current_price = last_close
 
     for change in daily_changes_pct:
         current_price = current_price * (1 + change)
@@ -73,7 +109,7 @@ def simple_dummy_forecast(df: pd.DataFrame, n_days: int = FORECAST_DAYS):
         }
     )
 
-    expected_return_pct = (forecast_df["predicted_close"].iloc[-1] / float(last_close) - 1) * 100
+    expected_return_pct = (forecast_df["predicted_close"].iloc[-1] / last_close - 1) * 100
 
     if expected_return_pct > 3:
         action = "BUY"
@@ -112,23 +148,29 @@ def main():
     with st.spinner("Loading market data..."):
         df = load_price_data(symbol)
 
-    if df is None or df.empty or "close" not in df.columns:
+    # Validate data
+    if df is None or df.empty:
         st.error("No price data available for this symbol right now. Please try another one or reload.")
         return
 
-    # Clean data
-    df = df.dropna(subset=["close"])
-    if df.empty:
-        st.error("No valid closing prices found for this symbol. Please try another one.")
+    if "close" not in df.columns:
+        st.error(
+            "Price data loaded but 'close' column is missing. "
+            "This may be a temporary data issue. Please try again later or choose another symbol."
+        )
+        st.write("Columns received:", list(df.columns))
         return
 
-    last_close = df["close"].iloc[-1]
+    # Use only rows with non-null close
+    df = df[df["close"].notna()]
+    if df.empty:
+        st.error("No valid closing prices found after cleaning. Please try another symbol.")
+        return
+
+    last_close = float(df["close"].iloc[-1])
 
     st.subheader(f"Current overview: {symbol_label}")
-    try:
-        st.metric("Last close", f"{float(last_close):,.2f} INR")
-    except Exception:
-        st.metric("Last close", str(last_close))
+    st.metric("Last close", f"{last_close:,.2f} INR")
 
     # Historical chart
     st.markdown("### Historical prices (last ~1 year)")
@@ -160,7 +202,7 @@ def main():
             pd.DataFrame(
                 {
                     "date": [df.index[-1].date()],
-                    "price": [float(last_close)],
+                    "price": [last_close],
                     "type": ["Actual last close"],
                 }
             ),

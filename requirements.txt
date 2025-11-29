@@ -1,7 +1,7 @@
 streamlit
-yfinance
 pandas
 numpy
 plotly
 pandas-ta
 scikit-learn
+finnhub-python

@@ -3,13 +3,13 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 from utils.data_manager import get_historical_data, get_nifty50_tickers
-from utils.algorithm_engine import run_short_term_algo
+from utils.algorithm_engine import run_short_term_algo, add_indicators # Import add_indicators for charting
 import numpy as np
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Personal Stock Recommender")
 
-# --- Filters and Settings ---
+# (Sidebar code remains the same)
 st.sidebar.header("Filters & Settings")
 holding_period = st.sidebar.radio(
     "Select Holding Period:",
@@ -18,7 +18,7 @@ holding_period = st.sidebar.radio(
 )
 st.sidebar.markdown(f"**Next Refresh:** {datetime.now().strftime('%d %b, 4:30 PM IST')} (Daily EOD)")
 
-# --- Data Fetching (runs once due to caching) ---
+# (Data Fetching code remains the same)
 TICKER_LIST = get_nifty50_tickers()
 @st.cache_data(show_spinner="Loading and backtesting 5+ years of data...")
 def get_backtest_data():
@@ -102,33 +102,25 @@ if selected_ticker:
     # --- Candlestick Chart with Historical Signals ---
     st.markdown(f"### Historical Signals for {selected_ticker}")
     
-    # Rerunning algo to get the signals for plotting
-    df_chart = df_ticker_analysis.copy()
+    # FIX: Use the robust add_indicators function to prepare the chart data
+    df_chart = add_indicators(df_ticker_analysis.copy())
     
-    # Re-run the algorithm function to get the DataFrame with the 'Final_Signal' column
-    # Note: We discard the prediction/prescription output here, we just want the processed DF
-    df_with_signals = run_short_term_algo(df_chart.set_index('Date').sort_index(), backtest=False) 
+    if 'Final_Signal' not in df_chart.columns:
+        # Re-run the core logic to get the final signal column after indicators are added
+        # Note: This is redundant but ensures the signal column is present.
+        signal, prescription, rationale = run_short_term_algo(df_chart.copy()) 
+        # Rerun indicator logic one last time if necessary (only if run_short_term_algo returns DF)
+        
+        # We must re-create the final signal here since run_short_term_algo returns a tuple, not the DF.
+        df_chart['Trend_Filter'] = df_chart['Close'] > df_chart['EMA50']
+        df_chart['Momentum_Signal'] = np.where(df_chart['MACD_Line'] > df_chart['MACD_Signal'], 1.0, 0.0)
+        df_chart['Momentum_Signal'] = np.where(df_chart['MACD_Line'] < df_chart['MACD_Signal'], -1.0, df_chart['Momentum_Signal'])
+        buy_condition = (df_chart['Trend_Filter'] == True) & (df_chart['Momentum_Signal'] == 1.0) & (df_chart['RSI'] < 70)
+        sell_condition = (df_chart['Trend_Filter'] == False) & (df_chart['Momentum_Signal'] == -1.0)
+        df_chart['Final_Signal'] = 0
+        df_chart.loc[buy_condition, 'Final_Signal'] = 1
+        df_chart.loc[sell_condition, 'Final_Signal'] = -1
 
-    # Since run_short_term_algo returns a tuple when backtest=False, we must re-run the 
-    # indicator calculations here to get the DF with the 'Final_Signal' column created.
-    # --- Rerunning Indicator Calculations (Efficient way to get the DF for charting) ---
-    df_chart.set_index('Date', inplace=True)
-    df_chart.ta.ema(close='Close', length=50, append=True)
-    df_chart.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
-    df_chart.ta.rsi(close='Close', length=14, append=True)
-    
-    df_chart['EMA50'] = df_chart['EMA_50']
-    df_chart['MACD_Line'] = df_chart['MACD_12_26_9']
-    df_chart['MACD_Signal'] = df_chart['MACDS_12_26_9']
-    df_chart['RSI'] = df_chart['RSI_14']
-    
-    buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
-    sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
-    
-    df_chart['Final_Signal'] = 0
-    df_chart.loc[buy_condition, 'Final_Signal'] = 1
-    df_chart.loc[sell_condition, 'Final_Signal'] = -1
-    # --- End Rerunning ---
 
     # Only use the last 252 days (1 year) for chart clarity
     df_chart = df_chart.iloc[-252:].reset_index()
@@ -154,4 +146,4 @@ if selected_ticker:
     st.plotly_chart(fig, use_container_width=True)
     
 
-
+[Image of Streamlit stock analysis dashboard layout]

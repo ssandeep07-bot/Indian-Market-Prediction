@@ -1,8 +1,9 @@
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
-import streamlit as st
+import streamlit as st # <-- ADD THIS LINE
 
+# Rest of the code follows...
 # --- Helper Function to Process Indicators Robustly ---
 def add_indicators(df):
     """Adds necessary indicators to the DataFrame using pandas-ta."""

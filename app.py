@@ -3,24 +3,24 @@ import pandas as pd
 import plotly.graph_objects as go
 from datetime import datetime
 from utils.data_manager import get_historical_data, get_nifty50_tickers
-from utils.algorithm_engine import run_short_term_algo, add_indicators # Import add_indicators for charting
+from utils.algorithm_engine import run_short_term_algo, run_long_term_algo, add_indicators
 import numpy as np
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Personal Stock Recommender")
 
-# (Sidebar code remains the same)
+# --- Filters and Settings ---
 st.sidebar.header("Filters & Settings")
 holding_period = st.sidebar.radio(
     "Select Holding Period:",
-    ('Short-Term (5-Day Forecast)', 'Mid-Term (Placeholder)', 'Long-Term (Placeholder)'),
+    ('Short-Term (5-Day Forecast)', 'Long-Term (QVAL Proxy)'), # Mid-Term removed for clarity
     index=0
 )
 st.sidebar.markdown(f"**Next Refresh:** {datetime.now().strftime('%d %b, 4:30 PM IST')} (Daily EOD)")
 
-# (Data Fetching code remains the same)
+# --- Data Fetching (runs once due to caching) ---
 TICKER_LIST = get_nifty50_tickers()
-@st.cache_data(show_spinner="Loading and backtesting 5+ years of data...")
+@st.cache_data(show_spinner="Loading and backtesting 5+ years of data from Finnhub...")
 def get_backtest_data():
     return get_historical_data(TICKER_LIST, period='5y')
 
@@ -32,7 +32,7 @@ st.markdown(f"**Recommendations as of:** {datetime.now().strftime('%Y-%m-%d %H:%
 st.markdown("---")
 
 if full_data.empty:
-    st.error("Cannot load market data. Please check data_manager.py.")
+    st.error("Cannot load market data. Please check Finnhub Key and API limits.")
     st.stop()
 
 # --- 1. Algorithm Run and Recommendation Table ---
@@ -47,9 +47,11 @@ for i, ticker in enumerate(unique_tickers):
     
     df_ticker = full_data[full_data['Ticker'] == ticker].copy()
     
-    # Run the model
+    # Run the model based on sidebar selection
     if holding_period == 'Short-Term (5-Day Forecast)':
         signal, prescription, rationale = run_short_term_algo(df_ticker)
+    elif holding_period == 'Long-Term (QVAL Proxy)':
+        signal, prescription, rationale = run_long_term_algo(df_ticker)
     else:
         signal, prescription, rationale = "N/A", "Model not implemented.", "N/A"
         
@@ -89,8 +91,14 @@ selected_ticker = st.selectbox(
 if selected_ticker:
     df_ticker_analysis = full_data[full_data['Ticker'] == selected_ticker].copy()
     
-    # Run the backtesting logic to get KPIs (FR-O03)
-    kpis = run_short_term_algo(df_ticker_analysis, backtest=True)
+    # Determine which function to use for backtesting based on the selected period
+    if holding_period == 'Short-Term (5-Day Forecast)':
+        kpis = run_short_term_algo(df_ticker_analysis, backtest=True)
+    elif holding_period == 'Long-Term (QVAL Proxy)':
+        kpis = run_long_term_algo(df_ticker_analysis, backtest=True)
+    else:
+        kpis = {"Sharpe Ratio": "N/A", "Max Drawdown": "N/A", "CAGR": "N/A", "Win Rate": "N/A", "Total Trades": "N/A"}
+
 
     col1, col2, col3, col4, col5 = st.columns(5)
     
@@ -102,33 +110,25 @@ if selected_ticker:
     # --- Candlestick Chart with Historical Signals ---
     st.markdown(f"### Historical Signals for {selected_ticker}")
     
-    # FIX: Use the robust add_indicators function to prepare the chart data
+    # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
     
-    if 'Final_Signal' not in df_chart.columns:
-        # Re-run the core logic to get the final signal column after indicators are added
-        # Note: This is redundant but ensures the signal column is present.
-        signal, prescription, rationale = run_short_term_algo(df_chart.copy()) 
-        # Rerun indicator logic one last time if necessary (only if run_short_term_algo returns DF)
-        
-        # We must re-create the final signal here since run_short_term_algo returns a tuple, not the DF.
-        df_chart['Trend_Filter'] = df_chart['Close'] > df_chart['EMA50']
-        df_chart['Momentum_Signal'] = np.where(df_chart['MACD_Line'] > df_chart['MACD_Signal'], 1.0, 0.0)
-        df_chart['Momentum_Signal'] = np.where(df_chart['MACD_Line'] < df_chart['MACD_Signal'], -1.0, df_chart['Momentum_Signal'])
-        buy_condition = (df_chart['Trend_Filter'] == True) & (df_chart['Momentum_Signal'] == 1.0) & (df_chart['RSI'] < 70)
-        sell_condition = (df_chart['Trend_Filter'] == False) & (df_chart['Momentum_Signal'] == -1.0)
-        df_chart['Final_Signal'] = 0
+    # Rerun the signal logic to get the 'Final_Signal' column for charting (required since main algo returns tuple)
+    df_chart['Final_Signal'] = 0 
+    if not df_chart.empty:
+        # Re-run indicator-based signal logic
+        buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
+        sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
         df_chart.loc[buy_condition, 'Final_Signal'] = 1
         df_chart.loc[sell_condition, 'Final_Signal'] = -1
-
-
+    
     # Only use the last 252 days (1 year) for chart clarity
     df_chart = df_chart.iloc[-252:].reset_index()
     
     fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
-                                         open=df_chart['Close'].shift(1),
-                                         high=df_chart['Close'].rolling(5).max(),
-                                         low=df_chart['Close'].rolling(5).min(),
+                                         open=df_chart['Open'], # Use Open/Close from Finnhub data
+                                         high=df_chart['High'],
+                                         low=df_chart['Low'],
                                          close=df_chart['Close'],
                                          name='Price')])
 
@@ -145,5 +145,4 @@ if selected_ticker:
     fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Signals (Last 1 Year)")
     st.plotly_chart(fig, use_container_width=True)
     
-
 

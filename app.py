@@ -115,6 +115,9 @@ if selected_ticker:
     st.markdown(f"### Historical Signals for {selected_ticker}")
     
     # Use the robust add_indicators function to prepare the chart data
+   # app.py (around line 120) - FINAL CORRECTED CHART SIGNAL LOGIC
+
+    # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
     
     required_chart_cols = ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
@@ -123,7 +126,7 @@ if selected_ticker:
         st.warning(f"Chart Warning: Skipping signal plot for {selected_ticker} as critical indicators are missing (data may be incomplete).")
         df_chart['Final_Signal'] = 0
     else:
-        # Re-run the signal logic to get the 'Final_Signal' column for charting (Short-Term model logic)
+        # Re-run the signal logic using the consistent names created by add_indicators
         buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
         sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
         df_chart['Final_Signal'] = 0
@@ -133,7 +136,7 @@ if selected_ticker:
 
     # Only use the last 252 days (1 year) for chart clarity
     df_chart = df_chart.iloc[-252:].reset_index()
-    
+    # ... (rest of the charting code remains the same)    
     if df_chart.empty:
         st.error("Cannot display chart due to insufficient recent data.")
     else:

@@ -21,7 +21,7 @@ FORECAST_DAYS = 5
 def load_price_data(symbol: str, years: int = 2) -> pd.DataFrame:
     """
     Load OHLCV data for a single symbol using yfinance.
-    Uses auto_adjust=False to ensure standard columns like 'Close' exist.
+    Uses auto_adjust=False to ensure standard OHLCV columns exist.
     """
     end = dt.date.today()
     start = end - dt.timedelta(days=365 * years)
@@ -34,21 +34,21 @@ def load_price_data(symbol: str, years: int = 2) -> pd.DataFrame:
     if df is None or df.empty:
         return pd.DataFrame()
 
-    # Normalize column names: lower case, remove spaces
-    df.columns = [c.strip().lower() for c in df.columns]
+    # Ensure column names are strings and normalized
+    df.columns = [str(c).strip().lower() for c in df.columns]
 
     # Map possible column variants to a standard set
     col_map = {}
     for c in df.columns:
-        if c in ["open"]:
+        if c == "open":
             col_map[c] = "open"
-        elif c in ["high"]:
+        elif c == "high":
             col_map[c] = "high"
-        elif c in ["low"]:
+        elif c == "low":
             col_map[c] = "low"
         elif c in ["close", "adj close", "adjclose"]:
             col_map[c] = "close"
-        elif c in ["volume"]:
+        elif c == "volume":
             col_map[c] = "volume"
 
     df = df.rename(columns=col_map)
@@ -56,7 +56,17 @@ def load_price_data(symbol: str, years: int = 2) -> pd.DataFrame:
     # Keep only what we need
     wanted_cols = ["open", "high", "low", "close", "volume"]
     existing = [c for c in wanted_cols if c in df.columns]
+    if not existing:
+        return pd.DataFrame()
+
     df = df[existing]
+
+    # Make sure index is datetime
+    if not isinstance(df.index, pd.DatetimeIndex):
+        try:
+            df.index = pd.to_datetime(df.index)
+        except Exception:
+            pass
 
     return df
 

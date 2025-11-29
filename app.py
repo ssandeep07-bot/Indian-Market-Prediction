@@ -1,10 +1,10 @@
 import streamlit as st
 import pandas as pd
 import plotly.graph_objects as go
-import numpy as np
 from datetime import datetime
 from utils.data_manager import get_historical_data, get_nifty50_tickers
 from utils.algorithm_engine import run_short_term_algo
+import numpy as np
 
 # --- Configuration ---
 st.set_page_config(layout="wide", page_title="Personal Stock Recommender")
@@ -47,7 +47,7 @@ for i, ticker in enumerate(unique_tickers):
     
     df_ticker = full_data[full_data['Ticker'] == ticker].copy()
     
-    # Only run the short-term model for now
+    # Run the model
     if holding_period == 'Short-Term (5-Day Forecast)':
         signal, prescription, rationale = run_short_term_algo(df_ticker)
     else:
@@ -104,10 +104,34 @@ if selected_ticker:
     
     # Rerunning algo to get the signals for plotting
     df_chart = df_ticker_analysis.copy()
-    df_chart['Signal'] = run_short_term_algo(df_chart, backtest=False) # Simplified for quick chart plot
     
+    # Re-run the algorithm function to get the DataFrame with the 'Final_Signal' column
+    # Note: We discard the prediction/prescription output here, we just want the processed DF
+    df_with_signals = run_short_term_algo(df_chart.set_index('Date').sort_index(), backtest=False) 
+
+    # Since run_short_term_algo returns a tuple when backtest=False, we must re-run the 
+    # indicator calculations here to get the DF with the 'Final_Signal' column created.
+    # --- Rerunning Indicator Calculations (Efficient way to get the DF for charting) ---
+    df_chart.set_index('Date', inplace=True)
+    df_chart.ta.ema(close='Close', length=50, append=True)
+    df_chart.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
+    df_chart.ta.rsi(close='Close', length=14, append=True)
+    
+    df_chart['EMA50'] = df_chart['EMA_50']
+    df_chart['MACD_Line'] = df_chart['MACD_12_26_9']
+    df_chart['MACD_Signal'] = df_chart['MACDS_12_26_9']
+    df_chart['RSI'] = df_chart['RSI_14']
+    
+    buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
+    sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
+    
+    df_chart['Final_Signal'] = 0
+    df_chart.loc[buy_condition, 'Final_Signal'] = 1
+    df_chart.loc[sell_condition, 'Final_Signal'] = -1
+    # --- End Rerunning ---
+
     # Only use the last 252 days (1 year) for chart clarity
-    df_chart = df_chart.iloc[-252:]
+    df_chart = df_chart.iloc[-252:].reset_index()
     
     fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
                                          open=df_chart['Close'].shift(1),
@@ -130,4 +154,4 @@ if selected_ticker:
     st.plotly_chart(fig, use_container_width=True)
     
 
-
+[Image of Streamlit stock analysis dashboard layout]

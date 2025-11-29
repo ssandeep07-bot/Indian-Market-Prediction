@@ -1,10 +1,11 @@
 import pandas as pd
 import finnhub
 from datetime import timedelta, datetime
-import streamlit as st
+import streamlit as st # <-- ENSURE THIS IS PRESENT
 import time
 import numpy as np
 
+# Rest of the code follows...
 # --- 1. Finnhub API Client Setup ---
 @st.cache_resource
 def get_finnhub_client():

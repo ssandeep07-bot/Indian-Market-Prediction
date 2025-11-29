@@ -128,23 +128,27 @@ if selected_ticker:
   # app.py (around line 117) - FINAL STABLE CHARTING LOGIC
 
     # Use the robust add_indicators function to prepare the chart data
+    # app.py (Starting around line 117) - FINAL CORRECTED CHART SIGNAL LOGIC
+
+    # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
     
     # ------------------------------------------------------------------------
-    # 2. CHARTING LOGIC (Must isolate signal generation)
+    # 2. CHARTING LOGIC (Final Crash Prevention)
     # ------------------------------------------------------------------------
     
-    required_chart_cols = ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
+    required_chart_cols = ['Close', 'EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
     
     # Check if all critical columns are present AFTER running add_indicators
     indicators_present = all(col in df_chart.columns for col in required_chart_cols)
     
     if not indicators_present:
-        st.warning(f"Chart Warning: Cannot generate signals for {selected_ticker}. Data is insufficient or indicator calculation failed.")
+        st.warning(f"Chart Warning: Skipping signal plot for {selected_ticker}. Critical technical indicators are missing (data may be incomplete).")
         df_chart['Final_Signal'] = 0 # Initialize signal column safely
     else:
-        # EXECUTE SIGNAL LOGIC ONLY IF COLUMNS EXIST (This is the critical block)
-        # Note: buy_condition is calculated safely inside this IF block.
+        # EXECUTE SIGNAL LOGIC ONLY IF COLUMNS EXIST (This block is now guaranteed safe)
+        
+        # Line 120 (and subsequent lines) are now safe because the 'else' block ensures all columns exist.
         buy_condition = (df_chart['Close'] > df_chart['EMA50']) & \
                         (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & \
                         (df_chart['RSI'] < 70)
@@ -163,7 +167,7 @@ if selected_ticker:
     if df_chart.empty or df_chart['Close'].isnull().all():
         st.error("Cannot display chart due to missing recent pricing data.")
     else:
-        # Plotly chart creation (remains the same)
+        # Plotly chart creation (Only runs if data is present)
         fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
                                              open=df_chart['Open'], 
                                              high=df_chart['High'],

@@ -1,6 +1,8 @@
 import pandas as pd
 import numpy as np
 import pandas_ta as ta
+from datetime import timedelta
+import streamlit as st # Keep st import for debugging/logging
 
 # --- PREDICTION AND PRESCRIPTION CORE ---
 
@@ -12,6 +14,13 @@ def run_short_term_algo(df_ticker, backtest=False):
         df_ticker (pd.DataFrame): Historical data for one stock.
         backtest (bool): If True, returns KPIs. If False, returns latest signal.
     """
+    # ----------------------------------------------------
+    # FIX: Robustness Check - Ensure 'Close' column exists and DataFrame is large enough
+    # ----------------------------------------------------
+    if 'Close' not in df_ticker.columns:
+        st.error(f"Algorithm Error: Input DataFrame is missing the 'Close' column.")
+        return calculate_kpis(df_ticker) if backtest else ("HOLD", "Data Error: Missing Close Price.", "N/A")
+    
     # Requires 200 days for 50-day EMA and clean calculations
     if df_ticker.empty or len(df_ticker) < 200:
         return calculate_kpis(df_ticker) if backtest else ("HOLD", "Insufficient data (<200 days).", "N/A")
@@ -19,36 +28,36 @@ def run_short_term_algo(df_ticker, backtest=False):
     df = df_ticker.copy().set_index('Date').sort_index()
 
     # --- 1. Calculate Technical Indicators (using pandas-ta) ---
+    
+    # EMA50 (Trend Filter)
     df.ta.ema(close='Close', length=50, append=True)
     df['EMA50'] = df['EMA_50']
     
     # MACD (fast=12, slow=26, signal=9)
-    # This generates columns named MACD_12_26_9, MACDh_12_26_9, MACDS_12_26_9
+    # The FIX relies on the standard naming convention: MACD_12_26_9 and MACDS_12_26_9
     df.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
     df['MACD_Line'] = df['MACD_12_26_9']      
-    df['MACD_Signal'] = df['MACDS_12_26_9'] # FIX: Accessing the correct Signal line name
+    df['MACD_Signal'] = df['MACDS_12_26_9'] 
     
-    df.ta.rsi(close='Close', length=14, append=True)
+    # RSI (Condition)
+    # The error occurred here, likely because 'Close' was missing earlier
+    df.ta.rsi(close='Close', length=14, append=True) 
     df['RSI'] = df['RSI_14']
 
-    # --- 2. Generate Signals based on Triple-Confirmation ---
+    # --- 2. Generate Signals based on Triple-Confirmation (Logic remains the same) ---
     df['Trend_Filter'] = df['Close'] > df['EMA50']
     
-    # Momentum Signal: MACD Line > MACD Signal line
     df['Momentum_Signal'] = np.where(df['MACD_Line'] > df['MACD_Signal'], 1.0, 0.0)
     df['Momentum_Signal'] = np.where(df['MACD_Line'] < df['MACD_Signal'], -1.0, df['Momentum_Signal'])
 
-    # Final BUY condition: Trend UP AND Momentum BUY AND RSI not Overbought (<70)
     buy_condition = (df['Trend_Filter'] == True) & (df['Momentum_Signal'] == 1.0) & (df['RSI'] < 70)
-    
-    # Final SELL condition: Trend DOWN AND Momentum SELL
     sell_condition = (df['Trend_Filter'] == False) & (df['Momentum_Signal'] == -1.0)
     
     df['Final_Signal'] = 0
     df.loc[buy_condition, 'Final_Signal'] = 1
     df.loc[sell_condition, 'Final_Signal'] = -1
     
-    # --- Output ---
+    # --- Output (Prediction/Prescription) ---
     if backtest:
         return calculate_kpis(df)
     
@@ -71,14 +80,16 @@ def run_short_term_algo(df_ticker, backtest=False):
         rationale = "Trend/Momentum Conflict (Neutral)."
         return "HOLD", "Monitor next refresh.", rationale
 
+# (The calculate_kpis function remains the same)
 def calculate_kpis(df_signals):
     """
     Calculates Backtesting Key Performance Metrics (KPMs)
     Simulates a 5-day holding period.
     """
+    if 'Final_Signal' not in df_signals.columns or df_signals.empty:
+        return {"Sharpe Ratio": "0.00", "Max Drawdown": "0.00%", "CAGR": "0.00%", "Win Rate": "0.0%", "Total Trades": 0}
+        
     df_signals['Daily_Return'] = df_signals['Close'].pct_change()
-    
-    # Calculate returns based on a 5-day holding period after a signal
     df_signals['Hold_Return'] = df_signals['Daily_Return'].shift(-5).rolling(5).sum()
     df_signals['Trade_Return'] = df_signals['Hold_Return'] * df_signals['Final_Signal'].shift(1)
     
@@ -87,9 +98,7 @@ def calculate_kpis(df_signals):
     if completed_trades.empty:
         return {"Sharpe Ratio": "0.00", "Max Drawdown": "0.00%", "CAGR": "0.00%", "Win Rate": "0.0%", "Total Trades": 0}
 
-    # Aggregate Strategy Performance
     total_return = (completed_trades['Trade_Return'].fillna(0) + 1).prod() - 1
-    
     cumulative_returns = (completed_trades['Trade_Return'].fillna(0) + 1).cumprod()
     peak = cumulative_returns.expanding(min_periods=1).max()
     drawdown = (cumulative_returns / peak) - 1

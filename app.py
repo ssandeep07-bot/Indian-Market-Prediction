@@ -88,10 +88,14 @@ selected_ticker = st.selectbox(
     options=unique_tickers
 )
 
+# app.py (Starting around line 100) - FINAL STABLE VERSION
+
 if selected_ticker:
     df_ticker_analysis = full_data[full_data['Ticker'] == selected_ticker].copy()
     
-    # Run the backtesting logic to get KPIs (FR-O03)
+    # ------------------------------------------------------------------------
+    # 1. KPI DISPLAY (Runs the algorithm logic in backtest mode)
+    # ------------------------------------------------------------------------
     if holding_period == 'Short-Term (5-Day Forecast)':
         kpis = run_short_term_algo(df_ticker_analysis, backtest=True)
     elif holding_period == 'Long-Term (QVAL Proxy)':
@@ -103,7 +107,6 @@ if selected_ticker:
     if not isinstance(kpis, dict):
         kpis = {"Sharpe Ratio": "Data Error", "Max Drawdown": "Data Error", "CAGR": "Data Error", "Win Rate": "Data Error", "Total Trades": "N/A"}
 
-
     col1, col2, col3, col4, col5 = st.columns(5)
     
     col1.metric("Sharpe Ratio", kpis.get("Sharpe Ratio", "N/A"), "Goal: > 1.0")
@@ -111,22 +114,29 @@ if selected_ticker:
     col3.metric("CAGR", kpis.get("CAGR", "N/A"), "Goal: > Benchmark")
     col4.metric("Win Rate", kpis.get("Win Rate", "N/A"), "Total Trades: " + str(kpis.get("Total Trades", "N/A")))
     
-    # --- Candlestick Chart with Historical Signals ---
-    st.markdown(f"### Historical Signals for {selected_ticker}")
-    
-    # Use the robust add_indicators function to prepare the chart data
-   # app.py (around line 120) - FINAL CORRECTED CHART SIGNAL LOGIC
+    st.markdown("---")
+    st.markdown(f"### Historical Signals for {selected_ticker} 
 
+[Image of Streamlit stock analysis dashboard layout]
+")
+    
+    # ------------------------------------------------------------------------
+    # 2. CHARTING LOGIC (Requires indicator columns to be present)
+    # ------------------------------------------------------------------------
+    
     # Use the robust add_indicators function to prepare the chart data
     df_chart = add_indicators(df_ticker_analysis.copy())
     
     required_chart_cols = ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']
     
-    if not all(col in df_chart.columns for col in required_chart_cols):
-        st.warning(f"Chart Warning: Skipping signal plot for {selected_ticker} as critical indicators are missing (data may be incomplete).")
-        df_chart['Final_Signal'] = 0
+    # Check if all critical columns are present AFTER running add_indicators
+    indicators_present = all(col in df_chart.columns for col in required_chart_cols)
+    
+    if not indicators_present:
+        st.warning(f"Chart Warning: Cannot generate signals for {selected_ticker}. Data is insufficient or indicator calculation failed.")
+        df_chart['Final_Signal'] = 0 # Initialize signal column safely
     else:
-        # Re-run the signal logic using the consistent names created by add_indicators
+        # EXECUTE SIGNAL LOGIC ONLY IF COLUMNS EXIST
         buy_condition = (df_chart['Close'] > df_chart['EMA50']) & (df_chart['MACD_Line'] > df_chart['MACD_Signal']) & (df_chart['RSI'] < 70)
         sell_condition = (df_chart['Close'] < df_chart['EMA50']) & (df_chart['MACD_Line'] < df_chart['MACD_Signal'])
         df_chart['Final_Signal'] = 0
@@ -136,9 +146,9 @@ if selected_ticker:
 
     # Only use the last 252 days (1 year) for chart clarity
     df_chart = df_chart.iloc[-252:].reset_index()
-    # ... (rest of the charting code remains the same)    
-    if df_chart.empty:
-        st.error("Cannot display chart due to insufficient recent data.")
+    
+    if df_chart.empty or df_chart['Close'].isnull().all():
+        st.error("Cannot display chart due to missing recent pricing data.")
     else:
         fig = go.Figure(data=[go.Candlestick(x=df_chart['Date'],
                                              open=df_chart['Open'], 
@@ -147,17 +157,17 @@ if selected_ticker:
                                              close=df_chart['Close'],
                                              name='Price')])
 
-        buy_points = df_chart[df_chart['Final_Signal'] == 1.0]
-        sell_points = df_chart[df_chart['Final_Signal'] == -1.0]
+        # Plot signals only if they were calculated (indicators_present)
+        if indicators_present:
+            buy_points = df_chart[df_chart['Final_Signal'] == 1.0]
+            sell_points = df_chart[df_chart['Final_Signal'] == -1.0]
 
-        fig.add_trace(go.Scatter(x=buy_points['Date'], y=buy_points['Close'] * 0.99,
-                                 mode='markers', marker_symbol='triangle-up',
-                                 marker=dict(size=10, color='green'), name='Buy Signal'))
-        fig.add_trace(go.Scatter(x=sell_points['Date'], y=sell_points['Close'] * 1.01,
-                                 mode='markers', marker_symbol='triangle-down',
-                                 marker=dict(size=10, color='red'), name='Sell Signal'))
+            fig.add_trace(go.Scatter(x=buy_points['Date'], y=buy_points['Close'] * 0.99,
+                                     mode='markers', marker_symbol='triangle-up',
+                                     marker=dict(size=10, color='green'), name='Buy Signal'))
+            fig.add_trace(go.Scatter(x=sell_points['Date'], y=sell_points['Close'] * 1.01,
+                                     mode='markers', marker_symbol='triangle-down',
+                                     marker=dict(size=10, color='red'), name='Sell Signal'))
 
-        fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Signals (Last 1 Year)")
+        fig.update_layout(xaxis_rangeslider_visible=False, height=500, title=f"{selected_ticker} Price Action")
         st.plotly_chart(fig, use_container_width=True)
-    
-

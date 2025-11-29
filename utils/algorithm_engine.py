@@ -4,6 +4,8 @@ import pandas_ta as ta
 import streamlit as st
 
 # --- Helper Function to Process Indicators Robustly ---
+# utils/algorithm_engine.py (Updated add_indicators function)
+
 def add_indicators(df):
     """Adds necessary indicators to the DataFrame using pandas-ta."""
     if df.empty or 'Close' not in df.columns:
@@ -18,28 +20,37 @@ def add_indicators(df):
         
         # MACD (fast=12, slow=26, signal=9)
         df.ta.macd(close='Close', fast=12, slow=26, signal=9, append=True)
-        # FIX: Explicit column assignment relying on standard pandas-ta names
-        df['MACD_Line'] = df['MACD_12_26_9']      
-        df['MACD_Signal'] = df['MACDS_12_26_9']
         
+        # --- FIX: ROBUST MACD COLUMN IDENTIFICATION ---
+        macd_cols = [col for col in df.columns if col.startswith('MACD_') and 'S_' in col]
+        
+        if len(macd_cols) == 1:
+            # Found the correct Signal line name (e.g., MACD_S_12_26_9)
+            df['MACD_Line'] = df['MACD_12_26_9'] # The MACD line name is usually reliable
+            df['MACD_Signal'] = df[macd_cols[0]] # Use the dynamically found signal name
+        else:
+            # Fallback if names are completely missing or ambiguous
+            st.warning("MACD columns not found after calculation. Skipping MACD signals.")
+            df['MACD_Line'] = np.nan
+            df['MACD_Signal'] = np.nan
+            # Drop the other MACD columns to prevent confusion
+            df.drop(columns=[c for c in df.columns if c.startswith('MACD_') and len(c) > 6], errors='ignore', inplace=True)
+
         # RSI (Condition)
         df.ta.rsi(close='Close', length=14, append=True) 
         df['RSI'] = df['RSI_14']
         
-        # Drop initial NaN values created by indicators (e.g., first 50 days of EMA50)
         df.dropna(inplace=True)
         
     except Exception as e:
-        # If any indicator calculation fails due to missing data/key errors, log it
         st.warning(f"Error during indicator calculation: {e}. Returning incomplete data.")
-        # If indicator creation fails, remove the failed columns before returning
+        # Ensure that incomplete columns are cleaned before returning
         for col in ['EMA50', 'MACD_Line', 'MACD_Signal', 'RSI']:
             if col in df.columns:
-                df.drop(columns=[col], inplace=True)
+                df.drop(columns=[col], errors='ignore', inplace=True)
         return df.reset_index() 
         
     return df.reset_index()
-
 
 # --- Short-Term Strategy (Triple-Confirmation) ---
 def run_short_term_algo(df_ticker, backtest=False):

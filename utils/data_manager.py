@@ -8,7 +8,7 @@ def get_historical_data(ticker_list, period='5y'):
     """
     Fetches historical data for a list of tickers.
     
-    IMPORTANT: REPLACE yfinance with a reliable paid NSE/BSE data API for 
+    NOTE: REPLACE yfinance with a reliable paid NSE/BSE data API for 
     production use, as yfinance is unreliable for specific Indian stock data.
     """
     if not ticker_list:
@@ -26,17 +26,14 @@ def get_historical_data(ticker_list, period='5y'):
         
         # Check if data is multi-index (multiple tickers) or single index (one ticker)
         if isinstance(data.columns, pd.MultiIndex):
-            # For multiple tickers, stack the dataframe
-            data = data['Close'].stack().rename_axis(['Date', 'Ticker']).reset_index(name='Close')
-            # Fetch Volume separately as stacking all columns can be slow/complex
-            volume_data = yf.download(yf_tickers, period=period, progress=False)['Volume'].stack().rename_axis(['Date', 'Ticker']).reset_index(name='Volume')
-            
-            # Merge Close and Volume
-            data = pd.merge(data, volume_data, on=['Date', 'Ticker'])
+            # Stack the dataframe to get long format
+            data = data.stack().rename_axis(['Date', 'Ticker']).reset_index()
+            data.rename(columns={'Close': 'Close', 'Volume': 'Volume'}, inplace=True)
+            data = data[data['Ticker'].isin(yf_tickers)] # Filter out potential garbage
         else:
-            # For a single ticker (if only one was requested), fix the structure
+            # Handle single ticker case
             data = data.reset_index().rename(columns={'Close': 'Close', 'Volume': 'Volume'})
-            data['Ticker'] = ticker_list[0] # Manually assign ticker name
+            data['Ticker'] = ticker_list[0] + '.NS' # Assign full ticker name
             
         # Clean ticker names (remove the .NS suffix)
         data['Ticker'] = data['Ticker'].str.replace('.NS', '', regex=False)
@@ -51,7 +48,6 @@ def get_nifty50_tickers():
     """
     Hypothetical function to get a list of highly liquid Nifty 50 stocks for the universe.
     """
-    # This list represents your initial "Watchlist Universe" (Section 2 from previous answer)
     return [
         'RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 
         'KOTAKBANK', 'HINDUNILVR', 'AXISBANK', 'LT', 'SBIN'

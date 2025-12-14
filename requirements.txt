@@ -2,6 +2,6 @@ streamlit
 pandas
 numpy
 plotly
-pandas-ta
-scikit-learn
-finnhub-python
+pandas-ta  
+finnhub-python 
+psycopg2-binary  # Library for Postgres connection

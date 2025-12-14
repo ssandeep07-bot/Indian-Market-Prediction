@@ -1,64 +1,66 @@
 import pandas as pd
-import finnhub
-from datetime import timedelta, datetime
 import streamlit as st
-import time
+from datetime import timedelta
+import psycopg2
 import numpy as np
 
-# --- 1. Finnhub API Client Setup ---
+# --- 1. Supabase Connection Setup ---
 @st.cache_resource
-def get_finnhub_client():
-    """Initializes and returns the Finnhub client using Streamlit Secrets."""
-    API_KEY = st.secrets.get("FINNHUB_KEY")
-    if not API_KEY:
-        st.error("Finnhub API Key not found. Please add FINNHUB_KEY to Streamlit Secrets.")
+def get_db_connection():
+    """Initializes and returns the database connection using Streamlit Secrets."""
+    try:
+        conn = psycopg2.connect(
+            host=st.secrets["DB_HOST"],
+            database=st.secrets["DB_DATABASE"],
+            user=st.secrets["DB_USER"],
+            password=st.secrets["DB_PASSWORD"],
+            port=st.secrets["DB_PORT"]
+        )
+        return conn
+    except Exception as e:
+        st.error(f"Database connection failed: {e}")
         return None
-    return finnhub.Client(api_key=API_KEY)
 
-# --- 2. Core Data Fetching Function ---
-@st.cache_data(ttl=timedelta(days=1)) # Cache EOD data for 1 day
+# --- 2. Core Data Fetching Function (From Supabase) ---
+@st.cache_data(ttl=timedelta(hours=4)) # Cache data locally for a few hours
 def get_historical_data(ticker_list, period='5y'):
     """
-    Fetches historical data for a list of tickers from Finnhub (EOD).
-    Finnhub uses the format: NSE:TICKER (e.g., NSE:RELIANCE).
+    Fetches historical data for a list of tickers from the Supabase database.
     """
-    client = get_finnhub_client()
-    if client is None: return pd.DataFrame()
-    
-    st.info(f"Fetching 5 years (EOD) data for {len(ticker_list)} stocks from Finnhub...")
-    
-    all_data = []
-    end_time = int(time.time())
-    start_time = int((datetime.now() - timedelta(days=365 * 5)).timestamp()) # 5 years ago
-    
-    for i, ticker in enumerate(ticker_list):
-        symbol = f"NSE:{ticker}" 
-        
-        try:
-            result = client.stock_candles(symbol, 'D', start_time, end_time)
-            
-            if 's' in result and result['s'] == 'ok':
-                df = pd.DataFrame(result)
-                df.rename(columns={'t': 'Date', 'c': 'Close', 'v': 'Volume', 'h': 'High', 'l': 'Low', 'o': 'Open'}, inplace=True)
-                df['Date'] = pd.to_datetime(df['Date'], unit='s')
-                df['Ticker'] = ticker
-                
-                df = df[['Date', 'Ticker', 'Close', 'Volume', 'Open', 'High', 'Low']]
-                all_data.append(df)
-            else:
-                st.warning(f"Finnhub warning for {symbol}: {result.get('error', 'Data not OK')}")
-            
-            time.sleep(0.5) 
-            
-        except Exception as e:
-            st.error(f"Finnhub connection failed for {symbol}: {e}")
-            
-    if all_data:
-        return pd.concat(all_data).sort_values(['Ticker', 'Date']).reset_index(drop=True)
-    
-    return pd.DataFrame()
+    conn = get_db_connection()
+    if conn is None: return pd.DataFrame()
 
-# --- 3. Ticker List ---
+    try:
+        # Construct the WHERE clause to fetch data for all required tickers
+        ticker_list_str = "('" + "', '".join(ticker_list) + "')"
+        
+        query = f"""
+        SELECT date, ticker, close, volume, "open", high, low
+        FROM historical_data
+        WHERE ticker IN {ticker_list_str}
+        ORDER BY ticker, date;
+        """
+        
+        # Read data directly into a pandas DataFrame
+        df = pd.read_sql(query, conn)
+        
+        df.rename(columns={'ticker': 'Ticker', 'date': 'Date', 'open': 'Open'}, inplace=True)
+        
+        # Convert necessary columns to appropriate types
+        df['Date'] = pd.to_datetime(df['Date'])
+        
+        return df
+        
+    except Exception as e:
+        st.error(f"Error executing database query: {e}")
+        return pd.DataFrame()
+        
+    finally:
+        # Crucial: Close the connection after use
+        if conn:
+            conn.close()
+
+# --- 3. Ticker List (No Change) ---
 def get_nifty50_tickers():
     return [
         'RELIANCE', 'HDFCBANK', 'ICICIBANK', 'INFY', 'TCS', 
